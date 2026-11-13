@@ -116,6 +116,25 @@ OUT_ROOT      <- file.path(ANALYSIS_ROOT, "02_arc", "05_tracks")
 # script says so once and carries on without the annotation.
 DA_PEAKS_CSV <- file.path(ANALYSIS_ROOT, "01_tidy", "peaks_da.csv")
 
+# -----------------------------------------------------------------------------
+# WHICH VENDOR DA CALLS COUNT AS AN OVERLAP
+#
+# peaks_da.csv holds 306,854 rows spanning both tissues, all three colon
+# contrasts and every cell type. An unfiltered overlap against that union says
+# only "this peak was called differential somewhere in the delivery", which is
+# why an earlier version reported RPL18 and HSP90AB1 at 7 of 7: a union that
+# large hits almost everything.
+#
+# So the overlap is restricted to the tissue, the cell type being plotted and
+# the contrast that matches the arm comparison in the figure.
+#
+# These calls remain the vendor's cell-level FindMarkers results, which treat
+# thousands of cells as independent replicates when the experimental unit is 8
+# animals. The column is an annotation of where they looked, never evidence.
+# The replicated statistic is in da_pseudobulk_<tissue>.csv from ARC_06.
+# -----------------------------------------------------------------------------
+VENDOR_CONTRAST <- list(Brain = "THCCBD_vs_VEH", Colon = "VEH_vs_THCCBD")
+
 # Cell type is matched as a regex against celltype_display, not compared for
 # equality, because brain microglia are three clusters (Microglia-1 at 1,489
 # cells, Microglia-2 at 124, Microglia-3 at 70). Pooling them gives roughly 840
@@ -124,14 +143,97 @@ DA_PEAKS_CSV <- file.path(ANALYSIS_ROOT, "01_tidy", "peaks_da.csv")
 # see what went in.
 PANEL <- list(
   Brain = list(
-    celltype_regex = "^Microglia",
-    celltype_label = "Microglia",
-    genes = c("NRP1", "SIGLEC9", "SIGLEC5", "AIM2")
+    # Microglia-1 ONLY, not ^Microglia, changed 2026-11-06.
+    #
+    # Two reasons. First, ARC_06 showed that 6 of 18 brain cell types have no
+    # vendor RNA statistics at all and Microglia-2 and Microglia-3 are among
+    # them, so pooling ^Microglia put 194 untested cells into a track built to
+    # illustrate an RNA result. Second, every gene that survived selection did
+    # so in Microglia-1: 14 of 20 genes have Microglia-1 as their strongest
+    # cell type. Pooling three clusters to show a Microglia-1 effect dilutes it.
+    celltype_regex = "^Microglia-1$",
+    celltype_label = "Microglia-1",
+    # The token this cell type carries in the vendor's tidy tables, which is
+    # NOT the display label. Needed to filter peaks_da.csv down to the cell
+    # type actually being plotted; see VENDOR_CONTRAST below.
+    vendor_token = "Microglia_1",
+
+    # The full report panel minus the two mitochondrial genes. MT-ND1 and
+    # MT-ND5 are excluded because they cannot have ATAC peaks in this build at
+    # all: the reference set non_nuclear_contigs = ["chrM"], cellranger-arc
+    # excludes chrM from peak calling, and the consensus set came back on 22
+    # contigs. Drawing them would produce 2 empty tracks, not 2 null results.
+    #
+    # AIM2 was in the earlier panel from the collaborators' first ask and is
+    # kept, though it is not in the report's table.
+    #
+    # Statistics for these genes are in
+    #   .../02_arc/06_selection/Brain/deg_hits_Brain.csv
+    # and only 4 of them clear |log2FC| > 1 on a panel-local FDR, which is a
+    # prioritisation and not an error rate. These figures are therefore
+    # exploratory for most of the panel. Annotate accordingly.
+    genes = c(
+      # immune regulation
+      "NRP1", "VSIG4", "FOLR2", "SIGLEC9", "SIGLEC5",
+      # mitochondrial OXPHOS, nuclear-encoded only
+      "COX4I1", "NDUFB4", "ATP5MC3",
+      # lysosomal
+      "ATP6V0A1", "LAMTOR2", "RNASET2",
+      # ribosomal and proteostasis
+      "RPL18", "RPL29", "RPS6", "RPS9", "EEF1A1", "UBA52", "NEDD8",
+      "PSMB6", "HSP90AB1",
+      # from the collaborators' first request
+      "AIM2"
+    )
   ),
   Colon = list(
     celltype_regex = "^Macrophage",
     celltype_label = "Macrophages",
-    genes = c("HMOX1")
+    vendor_token = "Macrophage",
+    # ISG15 added 2026-11-05 at the collaborators' request. It is the gut
+    # counterpart of the brain report's claim that THC:CBD microglia show
+    # decreased interferon-stimulated gene expression, so it tests whether that
+    # ISG attenuation also appears in colon myeloid cells.
+    #
+    # 30 genes added 2026-11-11 from the collaboration team's colon macrophage
+    # list, grouped by the biology they were presumably picked for. Three of them
+    # were edited and the reason is recorded here rather than in a side note,
+    # because a silent symbol fix is indistinguishable from a typo later:
+    #
+    #   RIG-I     -> DDX58. RIG-I is the protein name. No annotation carries it
+    #                as a gene symbol, so the request as written would have
+    #                missed and been reported as a resolution failure.
+    #   CEMIP     -> kept, with KIAA1199 as the first alias. CEMIP is the post-
+    #                2016 symbol and Mmul8 release 97 predates the rename in
+    #                most of its gene models.
+    #   MMP1      -> kept, with MMP1A and MMP1L1 as aliases. The macaque MMP1
+    #                locus is annotated inconsistently across builds.
+    #
+    # Two more to watch in the resolution report rather than pre-emptively fix:
+    #   FCAR  (CD89) is a pseudogene or absent in several Old World monkeys, so
+    #         a miss here is biology and not an annotation gap.
+    #   IGHM  sits in the immunoglobulin locus, which Mmul8 annotates poorly,
+    #         and it is a B cell gene. If it resolves in macrophages, read the
+    #         per-cell heatmap before believing the track: ambient Ig mRNA and
+    #         doublets both land there.
+    genes = c(
+      # originally requested
+      "HMOX1", "ISG15",
+      # scavenger and efferocytosis receptors
+      "MERTK", "CD36", "COLEC12", "MSR1", "MRC2", "CD14",
+      # tissue remodelling and fibrosis
+      "CEMIP", "PDGFRB", "TNC", "MMP1", "COL5A3", "PLAU", "F13A1",
+      # interferon and antiviral
+      "STAT1", "CXCL9", "DDX58", "MX1", "OAS2",
+      # inflammasome, autophagy, apoptosis
+      "NLRP3", "CASP9", "ULK1", "LACC1", "SERPINB1",
+      # immunoregulatory and metabolic
+      "IL10RA", "HSD11B1", "HIF1A",
+      # adhesion and transcriptional
+      "ITGA6", "PKNOX2",
+      # the two to watch, see the note above
+      "FCAR", "IGHM"
+    )
   )
 )
 
@@ -143,12 +245,78 @@ GENE_ALIASES <- list(
   SIGLEC5 = c("SIGLEC5", "SIGLEG5", "SIGLEC-5"),
   NRP1    = c("NRP1", "NRP-1", "NEUROPILIN1"),
   AIM2    = c("AIM2"),
-  HMOX1   = c("HMOX1", "HO-1", "HMOX-1")
+  HMOX1   = c("HMOX1", "HO-1", "HMOX-1"),
+  # ISG15's older human aliases are worth trying because non-human primate
+  # builds sometimes carry the pre-2004 naming.
+  ISG15   = c("ISG15", "G1P2", "UCRP", "ISG-15", "IFI15", "IGI15"),
+  # Added with the full brain panel. ATP5MC3 was ATP5G3 before the 2016
+  # nomenclature change and Mmul8 predates that, so both are tried.
+  ATP5MC3 = c("ATP5MC3", "ATP5G3"),
+  COX4I1  = c("COX4I1", "COX4"),
+  NDUFB4  = c("NDUFB4"),
+  ATP6V0A1 = c("ATP6V0A1", "ATP6V0A1", "ATP6N1", "VPP1"),
+  LAMTOR2 = c("LAMTOR2", "ROBLD3", "MAPBPIP"),
+  RNASET2 = c("RNASET2"),
+  HSP90AB1 = c("HSP90AB1", "HSP90B", "HSPCB"),
+  UBA52   = c("UBA52", "UBCEP2"),
+  NEDD8   = c("NEDD8"),
+  PSMB6   = c("PSMB6"),
+  VSIG4   = c("VSIG4", "CRIg", "Z39IG"),
+  FOLR2   = c("FOLR2", "FBP"),
+
+  # --- colon macrophage panel, added 2026-11-11 -----------------------------
+  # Older symbols first where Mmul8 release 97 predates a rename, since the
+  # resolver tries these in order and the first hit wins.
+  DDX58    = c("DDX58", "RIGI", "RIG-I", "RIGI1", "RLR1"),
+  CEMIP    = c("KIAA1199", "CEMIP", "TMEM2L"),
+  MMP1     = c("MMP1", "MMP1A", "MMP1L1", "CLG"),
+  MERTK    = c("MERTK", "MER", "EYK", "NYK"),
+  CD36     = c("CD36", "GP4", "GP3B", "SCARB3", "FAT"),
+  COLEC12  = c("COLEC12", "CL-P1", "SCARA4", "NSR2"),
+  MSR1     = c("MSR1", "CD204", "SCARA1", "MSR"),
+  MRC2     = c("MRC2", "ENDO180", "CD280", "KIAA0709", "UPARAP"),
+  CD14     = c("CD14"),
+  PDGFRB   = c("PDGFRB", "PDGFR", "PDGFR1", "CD140B"),
+  TNC      = c("TNC", "HXB", "TN"),
+  COL5A3   = c("COL5A3"),
+  PLAU     = c("PLAU", "UPA", "URK"),
+  F13A1    = c("F13A1", "F13A"),
+  STAT1    = c("STAT1"),
+  CXCL9    = c("CXCL9", "MIG", "SCYB9", "CMK"),
+  MX1      = c("MX1", "MXA", "IFI78"),
+  OAS2     = c("OAS2"),
+  NLRP3    = c("NLRP3", "NALP3", "CIAS1", "PYPAF1", "CLR1.1"),
+  CASP9    = c("CASP9", "MCH6", "APAF3", "ICE-LAP6"),
+  ULK1     = c("ULK1", "ATG1", "ATG1A", "UNC51"),
+  # LACC1 was C13orf31 before 2014 and Mmul8 may still carry the locus tag.
+  LACC1    = c("LACC1", "C13orf31", "FAMIN"),
+  SERPINB1 = c("SERPINB1", "ELANH2", "MNEI", "PI2"),
+  IL10RA   = c("IL10RA", "IL10R", "CD210", "CDW210A"),
+  HSD11B1  = c("HSD11B1", "HSD11", "HSD11L", "HSD11B"),
+  HIF1A    = c("HIF1A", "HIF1", "MOP1", "PASD8", "BHLHE78"),
+  ITGA6    = c("ITGA6", "CD49F", "VLA6"),
+  PKNOX2   = c("PKNOX2"),
+  FCAR     = c("FCAR", "CD89", "FCAR1"),
+  IGHM     = c("IGHM", "IGHM1", "MU", "VH")
 )
 # When every alias misses, candidates are offered from this prefix.
 GENE_FAMILY_HINT <- list(
   SIGLEC9 = "SIGLEC", SIGLEC5 = "SIGLEC",
-  NRP1 = "NRP", AIM2 = "AIM", HMOX1 = "HMOX"
+  NRP1 = "NRP", AIM2 = "AIM", HMOX1 = "HMOX", ISG15 = "ISG",
+  ATP5MC3 = "ATP5", COX4I1 = "COX4", NDUFB4 = "NDUF",
+  ATP6V0A1 = "ATP6V", LAMTOR2 = "LAMTOR", RNASET2 = "RNASET",
+  RPL18 = "RPL", RPL29 = "RPL", RPS6 = "RPS", RPS9 = "RPS",
+  EEF1A1 = "EEF1", UBA52 = "UBA", NEDD8 = "NEDD", PSMB6 = "PSMB",
+  HSP90AB1 = "HSP90", VSIG4 = "VSIG", FOLR2 = "FOLR",
+  # colon macrophage panel
+  DDX58 = "DDX5", CEMIP = "KIAA11", MMP1 = "MMP", MERTK = "MERT",
+  CD36 = "CD3", COLEC12 = "COLEC", MSR1 = "MSR", MRC2 = "MRC",
+  CD14 = "CD1", PDGFRB = "PDGFR", TNC = "TN", COL5A3 = "COL5",
+  PLAU = "PLAU", F13A1 = "F13", STAT1 = "STAT", CXCL9 = "CXCL",
+  MX1 = "MX", OAS2 = "OAS", NLRP3 = "NLRP", CASP9 = "CASP",
+  ULK1 = "ULK", LACC1 = "LACC", SERPINB1 = "SERPINB", IL10RA = "IL10R",
+  HSD11B1 = "HSD11", HIF1A = "HIF1", ITGA6 = "ITGA", PKNOX2 = "PKNOX",
+  FCAR = "FC", IGHM = "IGH"
 )
 
 # Arms to draw, control first. Every panel orders tracks by this vector rather
@@ -213,7 +381,12 @@ PAIRED_ONLY <- TRUE
 # -----------------------------------------------------------------------------
 MIN_CELLS_PAIRED <- 1
 MIN_CELLS_FLAG   <- 50
-MIN_CELLS_DROP   <- 5
+# 0 by default: draw every track and let its n speak. Dropping a track is what
+# created the NA that crashed the run, and it is also the behavior you asked me
+# to stop: a control track must not disappear because it is small. Raise this
+# only if you want tiny tracks gone, and the per-animal panel then subsets them
+# out rather than leaving NAs in a grouping variable.
+MIN_CELLS_DROP   <- 0
 
 # Track labels carry their cell count, so a 6-cell control track cannot be read
 # as equivalent to a 600-cell one no matter who is looking at the figure.
@@ -245,18 +418,161 @@ ARM_TP_COLORS <- c(
 
 EXTEND_UP      <- 20000
 EXTEND_DOWN    <- 5000
+
+# -----------------------------------------------------------------------------
+# PER-GENE WINDOW OVERRIDE, FOR GENES TOO SMALL TO READ IN THE COMMON WINDOW
+#
+# The 20 kb default is set by the vendor's own gene-to-peak map, which used
+# -20 kb to +2 kb, so a peak outside it has no counterpart in their DA tables.
+# That is the right default and it keeps genes comparable to each other.
+#
+# It does not suit a very small gene. ISG15 is roughly 1 to 2 kb of genomic
+# span, so in a 25 kb window the gene body is a sliver at one edge and the
+# promoter signal the collaborators are asking about is a few pixels wide.
+# 10 kb up and 2 kb down keeps the upstream regulatory region and still leaves
+# the gene legible.
+#
+# This is a deliberate deviation from the common window, so the figure subtitle
+# says which window it used. Delete the ISG15 line to put it back on the
+# default and regain strict comparability with HMOX1.
+# -----------------------------------------------------------------------------
+GENE_WINDOW <- list(
+  ISG15 = c(up = 10000, down = 2000)
+)
+
+window_for <- function(g) {
+  w <- GENE_WINDOW[[g]]
+  if (is.null(w)) return(c(up = EXTEND_UP, down = EXTEND_DOWN))
+  c(up = as.numeric(w[["up"]]), down = as.numeric(w[["down"]]))
+}
 PROMOTER_FLANK <- 2000
+
+# -----------------------------------------------------------------------------
+# LARGE GENES NEED A THIRD SCALE
+#
+# The byArm window is the gene body plus flanks, so for a long gene a promoter
+# peak becomes invisible. NRP1 is 158,677 bp, which makes its byArm window about
+# 184 kb, and chr9:33,563,188-33,564,105, the only accessibility peak in the
+# whole brain dataset that reaches FDR < 0.05 on the per-animal test, is 918 bp
+# of that: half a percent of the plot width.
+#
+# The promoter panel at TSS +/- 2 kb shows that peak but shows nothing around
+# it. So genes over LARGE_GENE_BP get one more panel at TSS +/- TSS_WINDOW,
+# which is wide enough to carry neighbouring regulatory elements and narrow
+# enough to read. Eight of the 21 brain genes qualify.
+# -----------------------------------------------------------------------------
+LARGE_GENE_BP <- 20000
+TSS_WINDOW    <- 10000
+
+# -----------------------------------------------------------------------------
+# RAW SIGNAL AND THE PER-CELL DISTRIBUTION
+#
+# WHY THIS EXISTS, which is the whole point of this revision.
+#
+# CoveragePlot's y axis is NOT raw Tn5 insertions. Signac divides each group's
+# coverage by a per-group scale factor equal to
+#
+#     (number of cells in the group) x (mean sequencing depth of the group)
+#
+# and then multiplies by a common factor, by default the median of those group
+# scale factors. So the y axis is closer to "insertions per cell per unit
+# depth" than to a read count.
+#
+# That normalization is correct for asking "is this locus more accessible per
+# cell in one arm than the other", and it is BLIND BY CONSTRUCTION to the
+# question the collaborators raised. A group where 10% of cells carry all the
+# signal and a group where 100% of cells carry a tenth each produce the SAME
+# normalized track. Dividing by cell number erases exactly the subpopulation
+# structure we want to see.
+#
+# So this section computes, from the fragment files, a bin-by-cell count matrix
+# over the plotted window. One computation then feeds three things the
+# normalized track cannot give:
+#
+#   1. per-group statistics: median, max, detection rate and how concentrated
+#      the signal is in the top decile of cells
+#   2. a RAW coverage track, summed fragments per bin, both arms on one shared
+#      axis, so magnitude differences are visible rather than normalized away
+#   3. a per-cell heatmap, cells sorted by total signal within arm, which shows
+#      a subpopulation directly if one exists
+#
+# RAW_BIN_BP trades resolution against file size. 200 bp is finer than the
+# 100 bp smoothing window CoveragePlot applies by default.
+# -----------------------------------------------------------------------------
+RAW_BIN_BP <- 200
+
+# Track labels gain the window median and max per cell. Set FALSE if the labels
+# get too long for a figure you are putting in a slide.
+LABEL_WITH_CELL_STATS <- TRUE
+
+# Cells drawn in the heatmap per group. All cells are used for the statistics
+# regardless; this only caps what is rendered.
+HEATMAP_MAX_CELLS <- 600
+
+# Shared y axis across every Signac panel for one gene. The normalized value
+# depends on the group scale factors, which differ between the arm panel and
+# the per-animal panel, so without this the two are not on a comparable scale
+# even for the same gene and the same window.
+SHARE_YMAX <- TRUE
+
+RAW_COLORS <- ARM_COLORS
 
 FONT_SIZE <- 28          # project convention is 28 to 34
 FIG_DPI   <- 300
 FIG_W     <- 14
 FIG_H_MIN <- 9
 
+# -----------------------------------------------------------------------------
+# THE CORNER TAG, replacing the paragraph that used to sit above every panel
+#
+# Changed 2026-11-12. Every figure previously carried a multi-line subtitle
+# explaining the normalization, the grouping and the per-arm distribution. That
+# was written to be read on its own, which is the wrong target: these figures go
+# into a slide or a panel next to several others, the top line ran off the plot
+# on the per-animal versions, and none of it was information a reader needs
+# while looking at the picture. All of it is still in the log and in the
+# _cellStats.csv next to each figure, which is where a number belongs when
+# someone wants to quote it.
+#
+# What stays on the figure is the shortest thing that keeps it from being
+# ambiguous: which tissue and cell type, and for the raw tracks the three
+# numbers that change how the track should be read.
+TAG_FONT_SIZE  <- FONT_SIZE      # same size as the rest, not a footnote
+TAG_COLOR      <- "#333333"
+
+# The concentration fraction, used BOTH by cell_stats() to compute the share and
+# by the figure text that reports it. One constant rather than a hardcoded 0.10
+# in the statistic and a hardcoded "10%" in the label, because those two drift
+# apart silently and the figure would then state a number it did not measure.
+TOP_FRACTION   <- 0.10
+
+# Fill under the raw coverage traces. Two semi-transparent fills on one axis
+# make the exclusive and shared parts of the signal separable at a glance.
+#
+# Note on what the overlap looks like: VEH is #0072B2 and THC/CBD is #D55E00,
+# which are blue and vermillion, so where they overlap they blend to a dark
+# olive-brown rather than purple. Purple comes from blue plus magenta. If the
+# blend matters more than keeping the current arm colors, set
+# RAW_COLORS <- c("VEH" = "#0072B2", "THC/CBD" = "#CC79A7") below, which is
+# still Okabe-Ito and still colorblind-safe, and the overlap reads violet.
+RAW_FILL_ALPHA <- 0.22
+
 # Signac's default. Scales each group's coverage by its total reads in the
 # assay, which is what makes the per-animal panel necessary rather than
 # optional: it corrects depth between groups, not between animals pooled
 # inside one group.
 NORMALIZATION <- "RC"
+
+# Signac 1.17.1's CoveragePlot does not accept a normalization argument, so the
+# value above is dropped by call_supported() and Signac's own default applies.
+# Claiming "RC normalization" in a figure subtitle when the argument was never
+# passed is a false statement on the figure, so the label is resolved from the
+# function's actual formals rather than from the constant.
+NORM_LABEL <- if ("normalization" %in% names(formals(Signac::CoveragePlot))) {
+  paste0(NORMALIZATION, " normalization")
+} else {
+  "Signac default normalization"
+}
 
 # -----------------------------------------------------------------------------
 # Cell 2: plumbing
@@ -286,9 +602,15 @@ for (fn in c("say", "hdr", "subh", "ok", "wrn")) {
 # panel so sample size travels with the picture.
 lab_n <- function(base, n) {
   if (!SHOW_N_IN_LABELS) return(base)
-  paste0(base, " (n=", format(n, big.mark = ","), ")")
+  # trim = TRUE matters. format() on a numeric VECTOR pads every element to a
+  # common width, so format(c(56, 357)) gives " 56" and "357". That space then
+  # ends up inside the label as "(n= 56)", which broke both strip_n() below and
+  # every palette lookup built on it, silently.
+  paste0(base, " (n=", format(n, big.mark = ",", trim = TRUE), ")")
 }
-strip_n <- function(x) base::sub(" \\(n=[0-9,]+\\)$", "", x)
+# Tolerant of stray whitespace either way, so a padded label can never again
+# slip past this and take the color mapping down with it.
+strip_n <- function(x) base::sub("[[:space:]]*\\(n=[[:space:]]*[0-9,]+\\)[[:space:]]*$", "", x)
 
 # Colors are keyed by the undecorated label, so the palette has to be rebuilt
 # against the decorated factor levels. If any level has no color, return NULL and
@@ -326,6 +648,13 @@ say(paste0("cell type: ", CT_LABEL, "   (regex ", PANEL[[TISSUE]]$celltype_regex
 say(paste0("genes:     ", paste(GENES_REQ, collapse = ", ")))
 say(paste0("window:    -", format(EXTEND_UP, big.mark = ","), " to +",
            format(EXTEND_DOWN, big.mark = ","), " bp around the gene body"))
+if (length(GENE_WINDOW)) {
+  for (gw in names(GENE_WINDOW)) {
+    say(sprintf("           %s overrides this: -%s to +%s bp", gw,
+                format(GENE_WINDOW[[gw]][["up"]], big.mark = ","),
+                format(GENE_WINDOW[[gw]][["down"]], big.mark = ",")))
+  }
+}
 say(paste0("out:       ", OUT_DIR))
 
 # -----------------------------------------------------------------------------
@@ -510,11 +839,15 @@ if (!CONTROL_ARM %in% levels(POST_OBJ$arm)) {
 # --- the paired timepoint set ------------------------------------------------
 
 TP_OBJ <- NULL
+TP_AN_OBJ <- NULL
 TP_ALL_OBJ <- NULL
 paired_animals <- character(0)
 if (!HAS_TIMECOURSE) {
   subh("timepoint panels")
-  wrn(paste0(TISSUE, " has a single timepoint (", paste(tp_levels, collapse = ", "),
+  # tp_levels is the intersection with TIMEPOINT_ORDER, which excludes
+  # "Single timepoint", so for brain it is empty and printed as "()".
+  tp_shown <- if (length(tp_levels)) tp_levels else levels(sub_obj$tp)
+  wrn(paste0(TISSUE, " has a single timepoint (", paste(tp_shown, collapse = ", "),
              "), so there is no before-and-after to draw."))
   if (TISSUE == "Brain") {
     say("          All 8 brain libraries are necropsy-only: the vendor collected")
@@ -618,12 +951,14 @@ if (!HAS_TIMECOURSE) {
     report_tp <- function(o, tag) {
       subh(paste0("cells per track: ", tag))
       for (nm in levels(o$arm_tp)) {
-        n <- sum(as.character(o$arm_tp) == nm)
+        n <- sum(as.character(o$arm_tp) == nm, na.rm = TRUE)
         say(sprintf("  %-40s %6d cells%s", nm, n,
                     if (n < MIN_CELLS_FLAG) "   (thin)" else ""))
       }
-      present_arms <- unique(strip_n(sub(" (Pre-infection|Post \\(necropsy\\))$", "",
-                                         levels(o$arm_tp))))
+      # The object carries arm as its own column, so read it. Reconstructing it
+      # from "VEH Pre-infection (n= 56)" by regex is what produced a false
+      # NO CONTROL TRACK warning on a panel that plainly had a control.
+      present_arms <- unique(as.character(o$arm[!is.na(o$arm)]))
       if (!CONTROL_ARM %in% present_arms) {
         wrn(paste0("NO CONTROL TRACK: '", CONTROL_ARM, "' has no cells at either ",
                    "timepoint in this cell type, so this panel shows the treated ",
@@ -634,7 +969,7 @@ if (!HAS_TIMECOURSE) {
       }
       say("")
       for (nm in levels(o$animal_tp)) {
-        n <- sum(as.character(o$animal_tp) == nm)
+        n <- sum(as.character(o$animal_tp) == nm, na.rm = TRUE)
         say(sprintf("  %-40s %6d cells%s", nm, n,
                     if (n < MIN_CELLS_FLAG) "   (thin)" else ""))
       }
@@ -647,6 +982,19 @@ if (!HAS_TIMECOURSE) {
     }
     TP_OBJ <- build_tp(tp_cells, paired_animals, "paired animals")
     report_tp(TP_OBJ, "paired animals")
+
+    # The per-animal panel gets its own object with the dropped cells removed,
+    # rather than being handed a grouping variable containing NAs. With
+    # MIN_CELLS_DROP at 0 nothing is dropped and this is the same object; it
+    # matters only if you raise that threshold.
+    an_keep <- colnames(TP_OBJ)[!is.na(TP_OBJ$animal_tp)]
+    TP_AN_OBJ <- if (length(an_keep) == ncol(TP_OBJ)) TP_OBJ else {
+      wrn(sprintf("per-animal panel excludes %d cell(s) in dropped tracks",
+                  ncol(TP_OBJ) - length(an_keep)))
+      o <- subset(TP_OBJ, cells = an_keep)
+      o$animal_tp <- droplevels(o$animal_tp)
+      o
+    }
     ok(sprintf("%s cells across %d timepoint tracks and %d animal tracks",
                format(ncol(TP_OBJ), big.mark = ","),
                length(levels(TP_OBJ$arm_tp)), length(levels(TP_OBJ$animal_tp))))
@@ -742,24 +1090,64 @@ ok(paste0(length(resolved), " of ", length(GENES_REQ), " genes resolved"))
 
 da_gr <- NULL
 if (file.exists(DA_PEAKS_CSV)) {
+  # peaks_da.csv from MULTIOME_01 names its peak column peak_id and already
+  # carries chrom, start and end as separate columns. The earlier version of
+  # this block looked for atac_peak / peak / region and then regex-parsed a
+  # coordinate string, so it failed its tryCatch on every run and the vendor DA
+  # annotation was silently absent from every _window_peaks.csv ever written.
+  # Verified against MULTIOME_01_build_tidy.py cell 4.
   da_ok <- tryCatch({
     da <- fread(DA_PEAKS_CSV)
-    pk_col <- intersect(c("atac_peak", "peak", "region"), names(da))[1]
-    if (is.na(pk_col)) stop("no peak column")
-    p <- as.character(da[[pk_col]])
-    m <- regmatches(p, regexec("^(.*)-(\\d+)-(\\d+)$", p))
-    good <- vapply(m, length, integer(1)) == 4
-    gr <- GRanges(vapply(m[good], `[`, character(1), 2),
-                  IRanges(as.numeric(vapply(m[good], `[`, character(1), 3)),
-                          as.numeric(vapply(m[good], `[`, character(1), 4))))
-    ct_col <- intersect(c("atac_celltype", "celltype", "cell_type"), names(da))[1]
+    if (all(c("chrom", "start", "end") %in% names(da))) {
+      good <- !is.na(da$chrom) & !is.na(da$start) & !is.na(da$end)
+      gr <- GRanges(as.character(da$chrom[good]),
+                    IRanges(as.numeric(da$start[good]), as.numeric(da$end[good])))
+    } else {
+      # Fallback for a table that only has the composite id.
+      pk_col <- intersect(c("peak_id", "atac_peak", "peak", "region"), names(da))[1]
+      if (is.na(pk_col)) {
+        stop("no chrom/start/end and no peak id column; columns are: ",
+             paste(names(da), collapse = ", "))
+      }
+      pv <- as.character(da[[pk_col]])
+      m <- regmatches(pv, regexec("^(.*)-(\\d+)-(\\d+)$", pv))
+      good <- vapply(m, length, integer(1)) == 4
+      gr <- GRanges(vapply(m[good], `[`, character(1), 2),
+                    IRanges(as.numeric(vapply(m[good], `[`, character(1), 3)),
+                            as.numeric(vapply(m[good], `[`, character(1), 4))))
+    }
+    ct_col <- intersect(c("celltype", "atac_celltype", "cell_type"), names(da))[1]
     if (!is.na(ct_col)) gr$celltype <- as.character(da[[ct_col]])[good]
+    ts_col <- intersect(c("tissue"), names(da))[1]
+    if (!is.na(ts_col)) gr$tissue <- as.character(da[[ts_col]])[good]
+    cn_col <- intersect(c("contrast"), names(da))[1]
+    if (!is.na(cn_col)) gr$contrast <- as.character(da[[cn_col]])[good]
     gr
   }, error = function(e) { wrn(paste0("could not use ", DA_PEAKS_CSV, ": ", conditionMessage(e))); NULL })
   if (!is.null(da_ok)) {
-    da_gr <- da_ok
-    ok(paste0(format(length(da_gr), big.mark = ","),
-              " vendor DA peaks loaded for window annotation"))
+    n_all <- length(da_ok)
+    tok <- PANEL[[TISSUE]]$vendor_token
+    con <- VENDOR_CONTRAST[[TISSUE]]
+    keep <- rep(TRUE, n_all)
+    if (!is.null(da_ok$tissue))   keep <- keep & da_ok$tissue == TISSUE
+    if (!is.null(da_ok$celltype) && !is.null(tok)) keep <- keep & da_ok$celltype == tok
+    if (!is.null(da_ok$contrast) && !is.null(con)) keep <- keep & da_ok$contrast == con
+    keep[is.na(keep)] <- FALSE
+    da_gr <- da_ok[keep]
+    say(sprintf("  vendor DA peaks: %s loaded, %s after filtering to %s / %s / %s",
+                format(n_all, big.mark = ","), format(length(da_gr), big.mark = ","),
+                TISSUE, if (is.null(tok)) "any cell type" else tok,
+                if (is.null(con)) "any contrast" else con))
+    if (!length(da_gr)) {
+      wrn("no vendor DA peaks survive that filter; the overlap column will be")
+      say("          all FALSE. Check the token and contrast against")
+      say("          peaks_da.csv before reading anything into it.")
+      da_gr <- NULL
+    } else {
+      ok("overlap column reflects THIS cell type and contrast only")
+      say("          (vendor calls are cell-level and pseudoreplicated: an")
+      say("          annotation of where they looked, not evidence)")
+    }
   }
 } else {
   wrn(paste0("no DA peak table at ", DA_PEAKS_CSV,
@@ -789,6 +1177,13 @@ tss_of <- function(gr) {
   if (as.character(strand(gr)) == "-") end(gr) else start(gr)
 }
 
+# Counts what THIS run wrote. The previous version counted every PDF in the
+# output directory, so a run whose panels all failed still reported 121 files,
+# most of them stale from an earlier run.
+FIGS_WRITTEN <- new.env(parent = emptyenv())
+FIGS_WRITTEN$n <- 0L
+FIGS_WRITTEN$stems <- character(0)
+
 save_fig <- function(p, stem, n_tracks) {
   h <- max(FIG_H_MIN, 3 + 1.6 * n_tracks)
   pdf_path <- file.path(OUT_DIR, paste0(stem, ".pdf"))
@@ -797,21 +1192,40 @@ save_fig <- function(p, stem, n_tracks) {
          device = grDevices::cairo_pdf, limitsize = FALSE)
   ggsave(png_path, p, width = FIG_W, height = h, units = "in",
          dpi = FIG_DPI, limitsize = FALSE)
+  FIGS_WRITTEN$n <- FIGS_WRITTEN$n + 1L
+  FIGS_WRITTEN$stems <- c(FIGS_WRITTEN$stems, stem)
   say(sprintf("    wrote %s.pdf and .png  (%.0f x %.0f in, %d dpi)",
               stem, FIG_W, h, FIG_DPI))
 }
 
+# The tag text. A function rather than a constant so it reads TISSUE and
+# CT_LABEL at call time, after Phase 2 has set them.
+#
+#   tag()              -> "Colon Macrophages"
+#   tag("by animal")   -> "Colon Macrophages  |  by animal"
+#
+# Nothing else goes in. The grouping token is there only because byArm, byAnimal
+# and the promoter zoom are otherwise indistinguishable once the figure is out
+# of its filename, and it is two or three words in every case.
+tag <- function(what = NULL) {
+  base <- paste(TISSUE, CT_LABEL)
+  if (is.null(what) || !nzchar(what)) base else paste0(base, "  |  ", what)
+}
+
 # Gene names are italic, everything else roman. The gene goes in the title on
-# its own so the whole title can be italicized; the cell type and grouping go
-# in the subtitle, which stays roman.
-decorate <- function(p, gene, subtitle) {
+# its own so the whole title can be italicized. The tag is right-aligned so it
+# sits in the top right of the figure and cannot collide with the gene name or
+# run past the edge, which is what the old multi-line subtitle did on the
+# per-animal panels.
+decorate <- function(p, gene, tag_text) {
   p +
     plot_annotation(
       title = gene,
-      subtitle = subtitle,
+      subtitle = tag_text,
       theme = theme(
         plot.title    = element_text(size = FONT_SIZE + 4, face = "bold.italic"),
-        plot.subtitle = element_text(size = FONT_SIZE)
+        plot.subtitle = element_text(size = TAG_FONT_SIZE, hjust = 1,
+                                     colour = TAG_COLOR)
       )
     ) &
     theme(text = element_text(size = FONT_SIZE))
@@ -841,7 +1255,8 @@ apply_arm_colors <- function(p, cols) {
   }
 }
 
-draw <- function(object, region, group_by, cols, extend_up, extend_down) {
+draw <- function(object, region, group_by, cols, extend_up, extend_down,
+                 ymax = NULL) {
   p <- call_supported(
     CoveragePlot,
     required = list(object = object, region = region),
@@ -854,11 +1269,272 @@ draw <- function(object, region, group_by, cols, extend_up, extend_down) {
       peaks             = TRUE,
       tile              = FALSE,
       links             = FALSE,       # no Links in this object; TRUE warns
+      ymax              = ymax,
       normalization     = NORMALIZATION
     ),
     label = "CoveragePlot")
   if (!"cols" %in% names(formals(CoveragePlot))) p <- apply_arm_colors(p, cols)
   p
+}
+
+# -----------------------------------------------------------------------------
+# Raw signal, per-cell statistics, and the subpopulation view
+# -----------------------------------------------------------------------------
+
+# The plotted window, strand-aware, matching what draw() shows.
+plotted_window <- function(region, extend_up, extend_down) {
+  w <- region
+  if (as.character(strand(w)) == "-") {
+    start(w) <- max(1, start(region) - extend_down); end(w) <- end(region) + extend_up
+  } else {
+    start(w) <- max(1, start(region) - extend_up);   end(w) <- end(region) + extend_down
+  }
+  w
+}
+
+window_bins <- function(w, bin = RAW_BIN_BP) {
+  st <- seq(from = start(w), to = end(w), by = bin)
+  GRanges(as.character(seqnames(w))[1],
+          IRanges(st, pmin(st + bin - 1L, end(w))))
+}
+
+# Bins x cells of raw fragment counts, straight off the fragment files. This is
+# the one computation behind the raw track, the statistics and the heatmap.
+window_counts <- function(object, w) {
+  bins <- window_bins(w)
+  if (!length(bins)) return(NULL)
+  fm <- tryCatch(
+    call_supported(
+      FeatureMatrix,
+      required = list(fragments = Fragments(object[["ATAC"]]),
+                      features  = bins,
+                      cells     = colnames(object)),
+      optional = list(process_n = 20000, verbose = FALSE),
+      label = "FeatureMatrix"),
+    error = function(e) { wrn(paste0("window_counts failed: ", conditionMessage(e))); NULL })
+  fm
+}
+
+# Per-group distribution statistics. Every number here is a RAW count, so none
+# of it is affected by the normalization discussed at the top of this file.
+#
+# top_decile_share is the diagnostic for the collaborators' question: the
+# fraction of all window fragments contributed by the most-covered 10% of
+# cells. At 0.1 the signal is spread evenly; near 1.0 it is a handful of cells.
+cell_stats <- function(fm, grp) {
+  if (is.null(fm)) return(NULL)
+  per_cell <- Matrix::colSums(fm)
+  grp <- as.character(grp[colnames(fm)])
+  out <- rbindlist(lapply(sort(unique(grp[!is.na(grp)])), function(gg) {
+    v <- per_cell[which(grp == gg)]
+    if (!length(v)) return(NULL)
+    k <- max(1L, ceiling(TOP_FRACTION * length(v)))
+    top <- sort(v, decreasing = TRUE)[seq_len(k)]
+    data.table(
+      group            = gg,
+      n_cells          = length(v),
+      total_fragments  = sum(v),
+      mean_per_cell    = mean(v),
+      median_per_cell  = stats::median(v),
+      q90_per_cell     = unname(stats::quantile(v, 0.90)),
+      max_per_cell     = max(v),
+      pct_cells_with_any = 100 * mean(v > 0),
+      top_decile_share = if (sum(v) > 0) sum(top) / sum(v) else NA_real_,
+      frag_per_cell_per_kb = mean(v) / (nrow(fm) * RAW_BIN_BP / 1000)
+    )
+  }))
+  out
+}
+
+# Label gains the raw median and max, which is what distinguishes "every cell a
+# little" from "a few cells a lot".
+label_with_stats <- function(base_levels, st) {
+  if (!LABEL_WITH_CELL_STATS || is.null(st)) return(setNames(base_levels, base_levels))
+  out <- vapply(base_levels, function(lv) {
+    r <- st[group == lv]
+    if (!nrow(r)) return(lv)
+    sprintf("%s  med %g, max %g", lv, r$median_per_cell[1], r$max_per_cell[1])
+  }, character(1))
+  setNames(out, base_levels)
+}
+
+# The raw track. Both arms on ONE shared axis in a single panel, because the
+# question is a magnitude comparison and separate panels invite separate scales.
+raw_track_plot <- function(fm, grp, w, gene, tag_text, st) {
+  if (is.null(fm)) return(NULL)
+  bins <- window_bins(w)
+  gv <- as.character(grp[colnames(fm)])
+  keep <- !is.na(gv)
+  lv <- intersect(names(ARM_COLORS), unique(gv[keep]))
+  if (!length(lv)) lv <- sort(unique(gv[keep]))
+  # TWO VERTICES PER BIN, AT THE BIN EDGES, NOT ONE AT THE MIDPOINT
+  #
+  # Changed 2026-11-13. The previous version put one vertex at each bin's
+  # midpoint, then drew geom_step for the outline and geom_area for the fill.
+  # Those two geoms disagree about what happens between vertices: geom_step
+  # holds the value flat and then jumps, while geom_area interpolates in a
+  # straight diagonal. So on every rising or falling edge the fill cut a
+  # triangle off under the line and stopped short of it, which is exactly the
+  # "shaded region doesn't push all the way up to the lines" that showed up in
+  # the figures. It was worst on sharp peaks, where the error is largest.
+  #
+  # Emitting a vertex at the start and the end of each bin makes the data
+  # itself the step: a plain geom_line through those vertices IS the staircase,
+  # and a geom_ribbon under the same vertices fills it exactly. The fill and the
+  # outline are now the same shape by construction rather than by two geoms
+  # agreeing, so they cannot drift apart again.
+  #
+  # It also puts the trace where the data actually is. A bin covering
+  # 1,000-1,200 bp is now drawn across 1,000-1,200 bp instead of being centred
+  # on 1,100 and spilling half a bin past each end of the window.
+  edges <- as.vector(rbind(start(bins) - 1L, end(bins)))
+  dt <- rbindlist(lapply(lv, function(gg) {
+    cols <- which(gv == gg)
+    cnt <- as.numeric(Matrix::rowSums(fm[, cols, drop = FALSE]))
+    data.table(group = gg, pos = edges, count = rep(cnt, each = 2L))
+  }))
+  dt[, group := factor(group, levels = lv)]
+
+  # One line per arm, carrying the three numbers that change how the trace
+  # should be read: n says how much cell is behind it, the read median says
+  # whether a
+  # typical cell contributes at all, and the decile share says whether the trace
+  # is an average over cells that mostly contribute nothing.
+  #
+  # Tissue and cell type go in the right-aligned subtitle rather than in here.
+  # Four lines of 28 pt inside the panel is tall enough to land on a peak, and
+  # two is not.
+  #
+  # The decile is fixed at 10% by cell_stats(), so the first number in the
+  # phrase is a constant rather than something read off the data. It is written
+  # out anyway because "top 10% = 42%" does not say which 10% or a percentage
+  # of what, and the figure goes to readers who did not build it.
+  cap <- st[match(lv, st$group)]
+  cap <- cap[!is.na(cap$group)]
+  corner <- paste(sprintf(
+    "%s  n=%d  read median %g  top %.0f%% of cells hold %.0f%% of reads",
+    cap$group, cap$n_cells, cap$median_per_cell,
+    100 * TOP_FRACTION, 100 * cap$top_decile_share), collapse = "\n")
+
+  ggplot(dt, aes(x = pos, y = count)) +
+    # Fill first, outline over it, both from the same bin-edge vertices.
+    #
+    # geom_ribbon rather than geom_area because geom_area stacks by default and
+    # would make the second arm sit on top of the first, so the figure would
+    # read as a sum rather than a comparison. A ribbon from 0 is the same shape
+    # with no stacking to switch off.
+    geom_ribbon(aes(ymin = 0, ymax = count, fill = group),
+                alpha = RAW_FILL_ALPHA, colour = NA) +
+    # geom_line, not geom_step. The staircase is already in the vertices, so
+    # geom_step here would step a second time and offset the outline by half a
+    # bin from its own fill.
+    geom_line(aes(colour = group), linewidth = 1.1) +
+    scale_fill_manual(values = RAW_COLORS[lv], name = NULL, drop = FALSE) +
+    scale_colour_manual(values = RAW_COLORS[lv], name = NULL, drop = FALSE) +
+    scale_x_continuous(labels = function(x) format(x, big.mark = ",", trim = TRUE)) +
+    # Flush to the inside of the top-right panel corner. hjust and vjust are
+    # exactly 1 rather than a fraction past it, because anything over 1 pushes
+    # the text past the panel edge where clipping cuts it off.
+    annotate("text", x = Inf, y = Inf, label = corner,
+             hjust = 1, vjust = 1, size = TAG_FONT_SIZE / .pt,
+             colour = TAG_COLOR, lineheight = 1.1) +
+    # Headroom so the two corner lines sit above the tallest peak rather than
+    # on it. 0.28 is enough for two lines at 28 pt in a 9 inch figure.
+    scale_y_continuous(expand = expansion(mult = c(0.02, 0.28))) +
+    # One legend, not two. Fill and colour carry the same information and
+    # whether ggplot merges their guides depends on version, so the fill guide
+    # is dropped outright instead of being left to chance.
+    guides(fill = "none") +
+    labs(title = gene, subtitle = tag_text,
+         x = paste0(as.character(seqnames(w))[1], " position (bp)"),
+         y = sprintf("raw fragments per %d bp", RAW_BIN_BP)) +
+    theme_minimal(base_size = FONT_SIZE) +
+    theme(plot.title = element_text(face = "bold.italic", size = FONT_SIZE + 4),
+          plot.subtitle = element_text(size = TAG_FONT_SIZE, hjust = 1,
+                                       colour = TAG_COLOR),
+          legend.position = "top",
+          panel.grid.minor = element_blank())
+}
+
+# ONE ROW PER CELL. x is genomic position in RAW_BIN_BP bins, fill is the raw
+# fragment count that one nucleus contributed to that bin, and rows are ordered
+# by each cell's total over the whole window, highest at the bottom of the rank
+# axis. Rank restarts within each arm, so row 1 of VEH and row 1 of THC/CBD are
+# different cells and the two facets are not aligned row for row.
+#
+# Only non-zero bins are drawn, so a cell with nothing in the window renders as
+# an unbroken strip of panel background. That is the point: if a subpopulation
+# carries the locus it shows as a dense block at the top of one arm with empty
+# background filling the rest, whereas a broad shift shows as speckle running
+# the full height.
+#
+# HEATMAP_MAX_CELLS caps the rows per arm so the raster stays legible. The cap
+# takes the HIGHEST-signal cells, so a capped facet is biased toward coverage
+# and the y axis label says when that happened.
+percell_heatmap <- function(fm, grp, w, gene, tag_text) {
+  if (is.null(fm)) return(NULL)
+  bins <- window_bins(w)
+  gv <- as.character(grp[colnames(fm)])
+  lv <- intersect(names(ARM_COLORS), unique(gv[!is.na(gv)]))
+  if (!length(lv)) lv <- sort(unique(gv[!is.na(gv)]))
+  per_cell <- Matrix::colSums(fm)
+  rows <- list()
+  capped <- FALSE
+  n_tot <- integer(0)
+  for (gg in lv) {
+    cols <- which(gv == gg)
+    n_tot[gg] <- length(cols)
+    cols <- cols[order(per_cell[cols], decreasing = TRUE)]
+    if (length(cols) > HEATMAP_MAX_CELLS) {
+      cols <- cols[seq_len(HEATMAP_MAX_CELLS)]
+      capped <- TRUE
+    }
+    sub <- fm[, cols, drop = FALSE]
+    nz <- Matrix::summary(as(sub, "TsparseMatrix"))
+    if (!nrow(nz)) next
+    rows[[gg]] <- data.table(
+      group = gg,
+      pos   = ((start(bins) + end(bins)) / 2)[nz$i],
+      cell_rank = nz$j,
+      count = nz$x)
+  }
+  if (!length(rows)) return(NULL)
+  dt <- rbindlist(rows)
+  dt[, group := factor(group, levels = lv)]
+  ylab <- if (capped) {
+    sprintf("cell, ranked by signal (top %s per arm of %s)",
+            format(HEATMAP_MAX_CELLS, big.mark = ",", trim = TRUE),
+            paste(format(n_tot[lv], big.mark = ",", trim = TRUE), collapse = " / "))
+  } else "cell, ranked by signal"
+  ggplot(dt, aes(x = pos, y = cell_rank, fill = count)) +
+    geom_raster() +
+    facet_wrap(~ group, ncol = 1, scales = "free_y") +
+    scale_fill_gradient(low = "#DCE6F1", high = "#B2182B", name = "frags",
+                        trans = "sqrt") +
+    scale_x_continuous(labels = function(x) format(x, big.mark = ",", trim = TRUE)) +
+    labs(title = gene, subtitle = tag_text,
+         x = paste0(as.character(seqnames(w))[1], " position (bp)"),
+         y = ylab) +
+    theme_minimal(base_size = FONT_SIZE) +
+    theme(plot.title = element_text(face = "bold.italic", size = FONT_SIZE + 4),
+          plot.subtitle = element_text(size = TAG_FONT_SIZE, hjust = 1,
+                                       colour = TAG_COLOR),
+          strip.text = element_text(size = FONT_SIZE, face = "bold"),
+          # A near-white panel so "this cell has nothing here" is visibly
+          # different from the pale blue of a single fragment.
+          panel.background = element_rect(fill = "#FAFAFA", colour = NA),
+          panel.grid = element_blank())
+}
+
+# The y limit CoveragePlot actually computed, harvested from the built plot so
+# it can be reused as a common ymax across every panel for one gene.
+harvest_ymax <- function(p) {
+  tryCatch({
+    b <- ggplot2::ggplot_build(p)
+    rr <- unlist(lapply(b$layout$panel_scales_y, function(sc) sc$range$range))
+    v <- suppressWarnings(max(as.numeric(rr), na.rm = TRUE))
+    if (is.finite(v) && v > 0) v else NULL
+  }, error = function(e) NULL)
 }
 
 window_peaks_table <- function(symbol, region, extend_up, extend_down) {
@@ -912,33 +1588,139 @@ for (g in names(resolved)) {
   start(prom) <- max(1, t0 - PROMOTER_FLANK); end(prom) <- t0 + PROMOTER_FLANK
   strand(prom) <- strand(region)
 
+  # Both of these used to be printed on every figure. The figures now carry a
+  # short corner tag instead, so they are logged rather than lost: the paired
+  # distinction is otherwise visible only in the _allAnimals filename suffix,
+  # and the normalization label was the whole point of the 2026-11-11 fix.
   tp_note <- if (PAIRED_ONLY) "paired animals only" else "all available animals"
+  if (!is.null(TP_OBJ)) say(sprintf("  timepoint panels: %s", tp_note))
+  say(sprintf("  Signac panels: %s", NORM_LABEL))
 
+  # Window for THIS gene: the common one unless GENE_WINDOW overrides it.
+  ew <- window_for(g)
+  win_note <- if (is.null(GENE_WINDOW[[g]])) "" else
+    sprintf(", window -%s/+%s bp", format(ew[["up"]], big.mark = ","),
+            format(ew[["down"]], big.mark = ","))
+  if (nzchar(win_note)) {
+    say(sprintf("  non-default window: -%s to +%s bp (small gene)",
+                format(ew[["up"]], big.mark = ","),
+                format(ew[["down"]], big.mark = ",")))
+  }
+
+  raw_done <- FALSE
   res <- tryCatch({
+    # --- raw signal first, because it decides the labels ---------------------
+    # Done before any Signac panel so the per-cell median and max can go into
+    # the track labels, and so the raw figures exist even if CoveragePlot
+    # struggles with an awkward window.
+    wplot <- plotted_window(region, ew[["up"]], ew[["down"]])
+    fm <- window_counts(POST_OBJ, wplot)
+    arm_vec <- setNames(as.character(POST_OBJ$arm), colnames(POST_OBJ))
+    st <- cell_stats(fm, arm_vec)
+
+    if (!is.null(st)) {
+      say(sprintf("  raw signal over %s bp in %d bins of %d bp",
+                  format(width(wplot), big.mark = ","),
+                  length(window_bins(wplot)), RAW_BIN_BP))
+      for (k in seq_len(nrow(st))) {
+        r <- st[k]
+        say(sprintf("    %-10s n=%4d  total %6.0f  median %4g  q90 %5g  max %5g  %5.1f%% covered  top decile %4.0f%%",
+                    r$group, r$n_cells, r$total_fragments, r$median_per_cell,
+                    r$q90_per_cell, r$max_per_cell, r$pct_cells_with_any,
+                    100 * r$top_decile_share))
+      }
+      conc <- st[!is.na(top_decile_share) & top_decile_share > 0.5]
+      if (nrow(conc)) {
+        wrn(sprintf("%s: the top 10%% of cells hold over half the signal, so the",
+                    paste(conc$group, collapse = " and ")))
+        say("          normalized track for that arm is an average over cells that")
+        say("          mostly contribute nothing. Read the heatmap before the track.")
+      }
+      st_out <- copy(st)
+      st_out[, `:=`(gene = g, tissue = TISSUE, celltype = CT_LABEL,
+                    window = sprintf("%s:%d-%d", as.character(seqnames(wplot))[1],
+                                     start(wplot), end(wplot)))]
+      fwrite(st_out, file.path(OUT_DIR, paste0(stem_base, "_cellStats.csv")))
+      say(sprintf("    wrote %s_cellStats.csv", stem_base))
+
+      pr <- raw_track_plot(fm, arm_vec, wplot, g, tag("raw fragments"), st)
+      if (!is.null(pr)) save_fig(pr, paste0(stem_base, "_rawCoverage"), 3)
+      ph <- percell_heatmap(fm, arm_vec, wplot, g, tag())
+      if (!is.null(ph)) save_fig(ph, paste0(stem_base, "_perCellHeatmap"), 7)
+      raw_done <- TRUE
+    }
+
+    # Per-gene track labels carrying this window's raw median and max.
+    #
+    # arm_map is named by arm ("VEH", "THC/CBD"), and current R keeps those
+    # names through factor(). Seurat's $<- then tries to match them against
+    # cell barcodes, finds no overlap, and errors with "No cell overlap between
+    # new meta data and Seurat object". That killed every coverage panel for
+    # every gene while the raw figures above succeeded, so the failure looked
+    # like a plotting problem rather than a metadata one.
+    #
+    # Named by barcode, which is what Seurat actually wants.
+    arm_map <- label_with_stats(levels(POST_OBJ$arm), st)
+    lab_vec <- unname(arm_map[as.character(POST_OBJ$arm)])
+    names(lab_vec) <- colnames(POST_OBJ)
+    POST_OBJ$arm_win <- factor(lab_vec,
+                               levels = unname(arm_map[levels(POST_OBJ$arm)]))
+
+    # Refuse to draw on a broken grouping column rather than emitting 21
+    # identical failures. Checks what actually matters: every cell labelled,
+    # and the right number of distinct tracks.
+    if (!"arm_win" %in% names(POST_OBJ@meta.data) ||
+        anyNA(POST_OBJ$arm_win) ||
+        nlevels(POST_OBJ$arm_win) != nlevels(POST_OBJ$arm)) {
+      stop("arm_win was not built correctly: ",
+           sum(is.na(POST_OBJ$arm_win)), " unlabelled cells, ",
+           nlevels(POST_OBJ$arm_win), " levels where ",
+           nlevels(POST_OBJ$arm), " were expected")
+    }
+    arm_pal <- setNames(unname(ARM_COLORS[levels(POST_OBJ$arm)]),
+                        unname(arm_map[levels(POST_OBJ$arm)]))
+    arm_pal <- arm_pal[!is.na(arm_pal)]
+
     # --- the arm panels, post-infection cells only ---------------------------
     # Control track first in all three, because the figure is read as treated
     # against control and not the other way round.
-    # 1. by arm, wide
-    p1 <- draw(POST_OBJ, region, "arm_lab",
-               palette_for(levels(POST_OBJ$arm_lab), ARM_COLORS),
-               EXTEND_UP, EXTEND_DOWN)
-    p1 <- decorate(p1, g, sprintf("%s %s, control then treated, %s normalization",
-                                  TISSUE, CT_LABEL, NORMALIZATION))
-    save_fig(p1, paste0(stem_base, "_byArm"), length(levels(POST_OBJ$arm_lab)))
+    # 1. by arm, wide. Drawn first so its y limit becomes the common ymax.
+    p1 <- draw(POST_OBJ, region, "arm_win", arm_pal, ew[["up"]], ew[["down"]])
+    ymax_common <- if (SHARE_YMAX) harvest_ymax(p1) else NULL
+    if (!is.null(ymax_common)) {
+      say(sprintf("  shared ymax across this gene's panels: %.3g", ymax_common))
+    }
+    p1 <- decorate(p1, g, tag("by arm"))
+    save_fig(p1, paste0(stem_base, "_byArm"), length(levels(POST_OBJ$arm_win)))
 
-    # 2. by animal, same window
-    p2 <- draw(POST_OBJ, region, "animal_track", NULL, EXTEND_UP, EXTEND_DOWN)
-    p2 <- decorate(p2, g, sprintf("%s %s, one track per animal, control animals first",
-                                  TISSUE, CT_LABEL))
+    # 2. by animal, same window. NOTE: Signac rescales per group, and the
+    # per-animal groups have different scale factors from the arm groups, so
+    # forcing the arm ymax here is what makes the two panels comparable.
+    p2 <- draw(POST_OBJ, region, "animal_track", NULL, ew[["up"]], ew[["down"]],
+               ymax = ymax_common)
+    p2 <- decorate(p2, g, tag("by animal"))
     save_fig(p2, paste0(stem_base, "_byAnimal"), length(at))
 
     # 3. promoter zoom, by arm
-    p3 <- draw(POST_OBJ, prom, "arm_lab",
-               palette_for(levels(POST_OBJ$arm_lab), ARM_COLORS), 0, 0)
-    p3 <- decorate(p3, g, sprintf("%s %s, TSS +/- %s bp, control then treated",
-                                  TISSUE, CT_LABEL,
-                                  format(PROMOTER_FLANK, big.mark = ",")))
-    save_fig(p3, paste0(stem_base, "_promoter"), length(levels(POST_OBJ$arm_lab)))
+    p3 <- draw(POST_OBJ, prom, "arm_win", arm_pal, 0, 0, ymax = ymax_common)
+    p3 <- decorate(p3, g, tag(sprintf("TSS +/- %s kb",
+                                      format(PROMOTER_FLANK / 1000, trim = TRUE))))
+    save_fig(p3, paste0(stem_base, "_promoter"), length(levels(POST_OBJ$arm_win)))
+
+    # 3b. TSS window, by arm, for genes too long to read at gene-body scale.
+    if (as.numeric(width(region)) > LARGE_GENE_BP) {
+      tssw <- region
+      start(tssw) <- max(1, t0 - TSS_WINDOW); end(tssw) <- t0 + TSS_WINDOW
+      strand(tssw) <- strand(region)
+      say(sprintf("  gene body is %s bp, adding a TSS +/- %s bp panel",
+                  format(as.numeric(width(region)), big.mark = ","),
+                  format(TSS_WINDOW, big.mark = ",")))
+      p3b <- draw(POST_OBJ, tssw, "arm_win", arm_pal, 0, 0, ymax = ymax_common)
+      p3b <- decorate(p3b, g, tag(sprintf("TSS +/- %s kb",
+                                          format(TSS_WINDOW / 1000, trim = TRUE))))
+      save_fig(p3b, paste0(stem_base, "_tss", TSS_WINDOW / 1000, "kb"),
+               length(levels(POST_OBJ$arm_win)))
+    }
 
     # --- the timepoint panels, colon only ------------------------------------
     if (!is.null(TP_OBJ)) {
@@ -947,9 +1729,8 @@ for (g in names(resolved)) {
       # behind each track.
       p4 <- draw(TP_OBJ, region, "tp_lab",
                  palette_for(levels(TP_OBJ$tp_lab), TP_COLORS),
-                 EXTEND_UP, EXTEND_DOWN)
-      p4 <- decorate(p4, g, sprintf("%s %s, pre vs post infection, %s",
-                                    TISSUE, CT_LABEL, tp_note))
+                 ew[["up"]], ew[["down"]])
+      p4 <- decorate(p4, g, tag("pre vs post"))
       save_fig(p4, paste0(stem_base, "_byTimepoint"), length(levels(TP_OBJ$tp)))
 
       # 5. arm by timepoint. Four tracks in control-first order: VEH before,
@@ -958,27 +1739,24 @@ for (g in names(resolved)) {
       # animals have a pre-infection sample bites hardest.
       p5 <- draw(TP_OBJ, region, "arm_tp",
                  palette_for(levels(TP_OBJ$arm_tp), ARM_TP_COLORS),
-                 EXTEND_UP, EXTEND_DOWN)
-      p5 <- decorate(p5, g, sprintf("%s %s, control then treated, before and after, %s",
-                                    TISSUE, CT_LABEL, tp_note))
+                 ew[["up"]], ew[["down"]])
+      p5 <- decorate(p5, g, tag("arm x timepoint"))
       save_fig(p5, paste0(stem_base, "_byArmTimepoint"),
                length(levels(TP_OBJ$arm_tp)))
 
       # 6. per animal, pairs adjacent. The only panel in which a within-animal
       # change is visible as such, rather than inferred from two pooled tracks
       # made of different cells.
-      p6 <- draw(TP_OBJ, region, "animal_tp", NULL, EXTEND_UP, EXTEND_DOWN)
-      p6 <- decorate(p6, g, sprintf("%s %s, before and after within each animal",
-                                    TISSUE, CT_LABEL))
+      p6 <- draw(TP_AN_OBJ, region, "animal_tp", NULL, ew[["up"]], ew[["down"]])
+      p6 <- decorate(p6, g, tag("animal x timepoint"))
       save_fig(p6, paste0(stem_base, "_byAnimalTimepoint"),
-               length(levels(TP_OBJ$animal_tp)))
+               length(levels(TP_AN_OBJ$animal_tp)))
 
       # 7. promoter zoom, arm by timepoint
       p7 <- draw(TP_OBJ, prom, "arm_tp",
                  palette_for(levels(TP_OBJ$arm_tp), ARM_TP_COLORS), 0, 0)
-      p7 <- decorate(p7, g, sprintf("%s %s, TSS +/- %s bp, control then treated, before and after",
-                                    TISSUE, CT_LABEL,
-                                    format(PROMOTER_FLANK, big.mark = ",")))
+      p7 <- decorate(p7, g, tag(sprintf("TSS +/- %s kb, arm x timepoint",
+                                        format(PROMOTER_FLANK / 1000, trim = TRUE))))
       save_fig(p7, paste0(stem_base, "_promoter_byArmTimepoint"),
                length(levels(TP_OBJ$arm_tp)))
     }
@@ -989,23 +1767,21 @@ for (g in names(resolved)) {
     if (!is.null(TP_ALL_OBJ)) {
       p8 <- draw(TP_ALL_OBJ, region, "arm_tp",
                  palette_for(levels(TP_ALL_OBJ$arm_tp), ARM_TP_COLORS),
-                 EXTEND_UP, EXTEND_DOWN)
-      p8 <- decorate(p8, g, sprintf("%s %s, control then treated, before and after, all animals",
-                                    TISSUE, CT_LABEL))
+                 ew[["up"]], ew[["down"]])
+      p8 <- decorate(p8, g, tag("arm x timepoint, all animals"))
       save_fig(p8, paste0(stem_base, "_byArmTimepoint_allAnimals"),
                length(levels(TP_ALL_OBJ$arm_tp)))
 
       p9 <- draw(TP_ALL_OBJ, prom, "arm_tp",
                  palette_for(levels(TP_ALL_OBJ$arm_tp), ARM_TP_COLORS), 0, 0)
-      p9 <- decorate(p9, g, sprintf("%s %s, TSS +/- %s bp, before and after, all animals",
-                                    TISSUE, CT_LABEL,
-                                    format(PROMOTER_FLANK, big.mark = ",")))
+      p9 <- decorate(p9, g, tag(sprintf("TSS +/- %s kb, all animals",
+                                        format(PROMOTER_FLANK / 1000, trim = TRUE))))
       save_fig(p9, paste0(stem_base, "_promoter_byArmTimepoint_allAnimals"),
                length(levels(TP_ALL_OBJ$arm_tp)))
     }
 
     # peak table for the window
-    wt <- window_peaks_table(symbol, region, EXTEND_UP, EXTEND_DOWN)
+    wt <- window_peaks_table(symbol, region, ew[["up"]], ew[["down"]])
     if (!is.null(wt)) {
       fwrite(wt, file.path(OUT_DIR, paste0(g, "_", TISSUE, "_window_peaks.csv")))
       say(sprintf("    %d consensus peaks in the window: %d promoter, %d upstream distal, %d downstream distal",
@@ -1021,9 +1797,14 @@ for (g in names(resolved)) {
     TRUE
   }, error = function(e) { wrn(paste0("failed: ", conditionMessage(e))); FALSE })
 
+  # Two flags, not one. The raw figures and the Signac panels fail
+  # independently, and the last run wrote 42 good raw figures while reporting
+  # "0 of 21 genes drawn" because a single ok column collapsed both.
   made <- rbind(made, data.table(gene = g, symbol = symbol,
                                  region = paste0(as.character(seqnames(region)), ":",
                                                  start(region), "-", end(region)),
+                                 raw_ok = isTRUE(raw_done),
+                                 panels_ok = res,
                                  ok = res))
 }
 
@@ -1035,10 +1816,32 @@ hdr("Done")
 print(made)
 fwrite(made, file.path(OUT_DIR, paste0("tracks_made_", TISSUE, ".csv")))
 
-n_fig <- 3L + if (is.null(TP_OBJ)) 0L else 4L + if (is.null(TP_ALL_OBJ)) 0L else 2L
+# Counted from what was actually written, not predicted. The TSS panel is
+# conditional on gene length, so 4 of the 21 brain genes get one more figure
+# than the rest and the old fixed arithmetic under-reported them.
+n_fig_base <- 3L + if (is.null(TP_OBJ)) 0L else 4L + if (is.null(TP_ALL_OBJ)) 0L else 2L
+n_written <- FIGS_WRITTEN$n
+n_stale <- length(list.files(OUT_DIR, pattern = "\\.pdf$")) - n_written
+n_fig <- n_fig_base
 say("")
-say(sprintf("  %d of %d genes drawn, %d figures each, PDF and PNG at %d dpi",
-            sum(made$ok), nrow(made), n_fig, FIG_DPI))
+say(sprintf("  coverage panels: %d of %d genes   raw figures: %d of %d",
+            sum(made$panels_ok), nrow(made), sum(made$raw_ok), nrow(made)))
+if (sum(made$panels_ok) < nrow(made)) {
+  wrn(sprintf("%d gene(s) produced no coverage panel. Any _byArm, _byAnimal,",
+              nrow(made) - sum(made$panels_ok)))
+  say("          _promoter or _tss file for those genes in the output directory")
+  say("          is from an EARLIER run. Do not read it as this run's output.")
+}
+say(sprintf("  %d figures per gene (%d for genes over %s bp), plus rawCoverage",
+            n_fig_base, n_fig_base + 1L, format(LARGE_GENE_BP, big.mark = ",")))
+say("  and perCellHeatmap for every gene")
+say(sprintf("  %d PDF files written BY THIS RUN, each with a matching PNG at %d dpi",
+            n_written, FIG_DPI))
+if (n_stale > 0) {
+  wrn(sprintf("%d other PDF(s) in that directory are from an earlier run.", n_stale))
+  say("          They are NOT regenerated figures. Check timestamps before")
+  say("          sending anything from there.")
+}
 say(sprintf("  output: %s", OUT_DIR))
 say(sprintf("  elapsed: %.1f min", as.numeric(difftime(Sys.time(), t_start, units = "mins"))))
 say("")
