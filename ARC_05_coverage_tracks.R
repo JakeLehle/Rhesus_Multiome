@@ -274,7 +274,14 @@ GENE_ALIASES <- list(
   CD36     = c("CD36", "GP4", "GP3B", "SCARB3", "FAT"),
   COLEC12  = c("COLEC12", "CL-P1", "SCARA4", "NSR2"),
   MSR1     = c("MSR1", "CD204", "SCARA1", "MSR"),
-  MRC2     = c("MRC2", "ENDO180", "CD280", "KIAA0709", "UPARAP"),
+  # ENSMMUG00000002167 is in this chain on purpose, and it is the entry that
+  # actually works. Mmul8 release 97 gives this gene no gene_name, so ARC_04's
+  # gene_id fallback means the annotation holds the bare Ensembl ID as the
+  # symbol. None of the real aliases can match; the ID matches exactly.
+  # Verified: chr16:56,239,180-56,305,179, 66,000 bp, against human MRC2's
+  # 65,928 bp. Keep the ID last so a properly named annotation wins first.
+  MRC2     = c("MRC2", "ENDO180", "CD280", "KIAA0709", "UPARAP",
+               "ENSMMUG00000002167"),
   CD14     = c("CD14"),
   PDGFRB   = c("PDGFRB", "PDGFR", "PDGFR1", "CD140B"),
   TNC      = c("TNC", "HXB", "TN"),
@@ -578,11 +585,68 @@ NORM_LABEL <- if ("normalization" %in% names(formals(Signac::CoveragePlot))) {
 # Cell 2: plumbing
 # -----------------------------------------------------------------------------
 
+# -----------------------------------------------------------------------------
+# ARGUMENTS, AND WHY A SUBSET NOW NEEDS A FLAG
+#
+# Changed 2026-11-13. Until now any trailing argument was read as a gene list
+# that REPLACED the panel:
+#
+#     GENES_REQ <- if (length(args) > 1) args[-1] else PANEL[[TISSUE]]$genes
+#
+# So `ARC_05_coverage_tracks.R Colon DDX58 CEMIP MMP1 FCAR IGHM`, which was
+# meant as a quick symbol check, wrote figures for five genes and nothing else.
+# Run after clearing the output directory, that leaves a directory holding five
+# genes out of thirty-two and no record that the other twenty-seven were never
+# asked for. The collaborators then reported MRC2 missing, which was correct:
+# it is in the panel, it resolves, and it was simply not requested on that run.
+#
+# The subset form is still useful, so it is kept, but it now has to be asked for
+# by name. A bare gene argument is refused rather than silently narrowing the
+# run, because that failure is invisible in the output and only shows up when
+# somebody downstream notices a gene they expected is absent.
+#
+#   Rscript ARC_05_coverage_tracks.R Colon                      # the FULL panel
+#   Rscript ARC_05_coverage_tracks.R Colon --only=DDX58,CEMIP   # a named subset
+#
+# Phase 6 then audits the output directory against the full panel on every run,
+# including subset runs, so an incomplete directory reports itself.
 args <- commandArgs(trailingOnly = TRUE)
-if (length(args) < 1) stop("usage: ARC_05_coverage_tracks.R <Brain|Colon> [gene ...]")
+if (length(args) < 1) {
+  stop("usage: ARC_05_coverage_tracks.R <Brain|Colon> [--only=GENE1,GENE2,...]")
+}
 TISSUE <- args[1]
 if (!TISSUE %in% names(PANEL)) stop("tissue must be Brain or Colon")
-GENES_REQ <- if (length(args) > 1) args[-1] else PANEL[[TISSUE]]$genes
+
+PANEL_GENES <- PANEL[[TISSUE]]$genes
+.extra   <- args[-1]
+.bare    <- .extra[!grepl("^--", .extra)]
+.only    <- grep("^--only=", .extra, value = TRUE)
+.unknown <- .extra[grepl("^--", .extra) & !grepl("^--only=", .extra)]
+
+if (length(.unknown)) {
+  stop("unrecognised option(s): ", paste(.unknown, collapse = ", "),
+       "\n  the only option is --only=GENE1,GENE2,...")
+}
+if (length(.bare)) {
+  stop("bare gene arguments are no longer accepted, because they silently ",
+       "replaced the panel.\n",
+       "  You passed: ", paste(.bare, collapse = ", "), "\n",
+       "  For the full ", TISSUE, " panel (", length(PANEL_GENES), " genes):\n",
+       "      Rscript ARC_05_coverage_tracks.R ", TISSUE, "\n",
+       "  For just those genes:\n",
+       "      Rscript ARC_05_coverage_tracks.R ", TISSUE,
+       " --only=", paste(.bare, collapse = ","))
+}
+
+SUBSET_RUN <- length(.only) > 0
+GENES_REQ <- if (SUBSET_RUN) {
+  g <- unlist(strsplit(base::sub("^--only=", "", .only), "[,[:space:]]+"))
+  g <- trimws(g); g <- g[nzchar(g)]
+  if (!length(g)) stop("--only= was given with no gene names after it")
+  g
+} else {
+  PANEL_GENES
+}
 
 say  <- function(...) cat(paste0(..., "\n"))
 hdr  <- function(x) { say(""); say(strrep("=", 76)); say(x); say(strrep("=", 76)) }
@@ -646,6 +710,29 @@ say(paste0("host:      ", Sys.info()[["nodename"]]))
 say(paste0("started:   ", format(t_start, "%Y-%m-%d %H:%M:%S")))
 say(paste0("cell type: ", CT_LABEL, "   (regex ", PANEL[[TISSUE]]$celltype_regex, ")"))
 say(paste0("genes:     ", paste(GENES_REQ, collapse = ", ")))
+if (SUBSET_RUN) {
+  say("")
+  say("  ***************************************************************")
+  say("  *  SUBSET RUN. This is NOT the full panel.                    *")
+  say("  ***************************************************************")
+  say(sprintf("  requested:  %d of %d panel genes", length(GENES_REQ),
+              length(PANEL_GENES)))
+  skipped <- setdiff(PANEL_GENES, GENES_REQ)
+  if (length(skipped)) {
+    say(sprintf("  NOT drawn:  %s", paste(skipped, collapse = ", ")))
+    say("  Any figure already on disk for those genes is left untouched and is")
+    say("  therefore OLDER than this run. Run without --only before sending")
+    say("  anything from this directory to the collaborators.")
+  }
+  off_panel <- setdiff(GENES_REQ, PANEL_GENES)
+  if (length(off_panel)) {
+    say(sprintf("  off-panel:  %s  (requested but not in PANEL$%s$genes)",
+                paste(off_panel, collapse = ", "), TISSUE))
+  }
+  say("")
+} else {
+  ok(sprintf("full panel run: all %d %s genes", length(PANEL_GENES), TISSUE))
+}
 say(paste0("window:    -", format(EXTEND_UP, big.mark = ","), " to +",
            format(EXTEND_DOWN, big.mark = ","), " bp around the gene body"))
 if (length(GENE_WINDOW)) {
@@ -703,6 +790,68 @@ ok(paste0(length(frag_list), " fragment files reachable"))
 ann <- Annotation(obj[["ATAC"]])
 if (is.null(ann) || length(ann) == 0) stop("the ATAC assay carries no gene annotation")
 ok(paste0(format(length(ann), big.mark = ","), " annotation records"))
+
+# -----------------------------------------------------------------------------
+# THE CROSSWALKED ANNOTATION
+#
+# Added 2026-11-13, after MRC2 produced no figure on a full-panel run.
+#
+# Mmul8 release 97 assigns no gene_name to 7,773 of 23,296 genes, and ARC_04
+# substitutes gene_id for the missing name, so a third of the annotation is
+# reachable only as ENSMMUG00000xxxxx. MRC2 is one of them: the GTF record is
+#
+#   chr16  ensembl  gene  56239180  56305179  .  +  .
+#     gene_id "ENSMMUG00000002167"; gene_version "3";
+#     gene_source "ensembl"; gene_biotype "protein_coding";
+#
+# with no gene_name attribute at all. The locus is 66,000 bp against human
+# MRC2's 65,928 bp, so it is the right gene, simply unlabelled.
+#
+# ARC_08_annotation_crosswalk.R maps gene_id to symbol from a current Ensembl
+# release (IDs are stable across releases) and writes a patched annotation
+# beside the object. Loading it here names 922 of those genes and takes symbol
+# coverage from 66.6% to 70.5%, without touching peaks, counts or coordinates.
+#
+# This is OPTIONAL. If the file is absent, the alias chain still resolves MRC2
+# through its bare Ensembl ID, because that is literally what the gene_name
+# field holds. The patch only changes what the gene-model track is LABELLED:
+# with it the track reads MRC2, without it it reads ENSMMUG00000002167.
+USE_CROSSWALKED_ANNOTATION <- TRUE
+
+ann_patch <- file.path(OBJ_ROOT, TISSUE,
+                       paste0("annotation_", TISSUE, "_crosswalked.rds"))
+if (USE_CROSSWALKED_ANNOTATION && file.exists(ann_patch)) {
+  ann_cw <- readRDS(ann_patch)
+  # Refuse a patch that is not the same annotation. A mismatch in length or in
+  # coordinates would mean it was built against a different object, and
+  # silently swapping it would move every gene model relative to the peaks.
+  if (length(ann_cw) != length(ann)) {
+    wrn(sprintf("crosswalked annotation has %s records against the object's %s; IGNORING it",
+                format(length(ann_cw), big.mark = ","),
+                format(length(ann), big.mark = ",")))
+    say("          Rebuild it with ARC_08 against THIS object before using it.")
+  } else if (!identical(as.character(seqnames(ann_cw)), as.character(seqnames(ann))) ||
+             !identical(start(ann_cw), start(ann))) {
+    wrn("crosswalked annotation has different coordinates; IGNORING it")
+    say("          Only gene_name should differ. Rebuild it with ARC_08.")
+  } else {
+    n_was <- sum(grepl("^ENSMMUG", unique(as.character(ann$gene_name))))
+    n_now <- sum(grepl("^ENSMMUG", unique(as.character(ann_cw$gene_name))))
+    ann <- ann_cw
+    Annotation(obj[["ATAC"]]) <- ann_cw
+    ok(sprintf("using the crosswalked annotation: unnamed genes %s -> %s",
+               format(n_was, big.mark = ","), format(n_now, big.mark = ",")))
+    say(sprintf("          %s", ann_patch))
+    say("          Symbols for previously unnamed genes come from a LATER Ensembl")
+    say("          release, matched by stable gene ID. Coordinates are unchanged")
+    say("          and are still Mmul8. Worth one line in the methods.")
+  }
+} else if (USE_CROSSWALKED_ANNOTATION) {
+  say("  no crosswalked annotation found, using the GTF's own names")
+  say(sprintf("    (would be %s)", ann_patch))
+  say("    Genes the GTF never named stay reachable only by their Ensembl ID.")
+  say("    Run ARC_08_annotation_crosswalk.R to recover their symbols.")
+}
 
 # -----------------------------------------------------------------------------
 # Cell 4: the cell group
@@ -1085,6 +1234,51 @@ if (!length(resolved)) {
 ok(paste0(length(resolved), " of ", length(GENES_REQ), " genes resolved"))
 
 # -----------------------------------------------------------------------------
+# IS EACH RESOLVED SYMBOL ONE LOCUS
+#
+# Added 2026-11-13 because the crosswalk introduces a specific hazard. ARC_08
+# recovered 922 symbols, and 92 of them collide with a symbol the GTF had
+# already assigned elsewhere. gene_region() spans every record sharing a
+# gene_name, so a collided symbol would silently merge two loci into one
+# window: a plausible-looking figure over a region that is not a gene.
+#
+# rev 14's multi-contig guard catches the cross-contig case and keeps the
+# best-supported contig. Two loci on the SAME contig would still merge, and the
+# only visible symptom is an implausible span. So check the span here, before
+# anything is drawn, rather than discovering it in a figure.
+#
+# 3 Mb is a deliberately loose ceiling. The largest real gene in either panel is
+# PKNOX2 at 271 kb, so nothing legitimate here comes close.
+PLAUSIBLE_SPAN_BP <- 3e6
+
+subh("one locus per symbol")
+span_tab <- rbindlist(lapply(names(resolved), function(g) {
+  sym <- resolved[[g]]
+  gg <- ann[!is.na(ann$gene_name) & ann$gene_name == sym]
+  sq <- unique(as.character(seqnames(gg)))
+  data.table(gene = g, symbol = sym, n_records = length(gg),
+             n_contigs = length(sq),
+             contigs = paste(sort(sq), collapse = ","),
+             span_bp = max(end(gg)) - min(start(gg)) + 1L)
+}))
+bad_span <- span_tab[n_contigs > 1 | span_bp > PLAUSIBLE_SPAN_BP]
+if (nrow(bad_span)) {
+  wrn(sprintf("%d symbol(s) do not look like a single locus:", nrow(bad_span)))
+  print(bad_span)
+  say("          A symbol on several contigs, or spanning more than ")
+  say(sprintf("          %s bp, is almost certainly two genes sharing a name.",
+              format(PLAUSIBLE_SPAN_BP, big.mark = ",", scientific = FALSE)))
+  say("          gene_region() keeps the best-supported contig and says so, but")
+  say("          a same-contig merge cannot be separated automatically. Check")
+  say("          these against annotation_crosswalk_report_<tissue>.csv before")
+  say("          sending any figure for them.")
+} else {
+  ok(sprintf("every resolved symbol is one contig and under %s bp",
+             format(PLAUSIBLE_SPAN_BP, big.mark = ",", scientific = FALSE)))
+}
+fwrite(span_tab, file.path(OUT_DIR, paste0("symbol_spans_", TISSUE, ".csv")))
+
+# -----------------------------------------------------------------------------
 # Cell 6: the vendor's DA peaks, if the tidy table is there
 # -----------------------------------------------------------------------------
 
@@ -1166,7 +1360,38 @@ if (!is.null(TP_OBJ)) Idents(TP_OBJ) <- "arm_tp"
 gene_region <- function(symbol) {
   g <- ann[!is.na(ann$gene_name) & ann$gene_name == symbol]
   if (!length(g)) return(NULL)
-  # One gene can appear as many transcript and exon records; take the span.
+
+  # One gene appears as many transcript and exon records, so the region is the
+  # span of those records. The span has to be taken WITHIN one contig and one
+  # strand.
+  #
+  # The previous version took seqnames[1] and strand[1] and then min(start) to
+  # max(end) across every record. When a symbol is annotated on more than one
+  # contig, which happens in Mmul8 for genes with a copy on an unplaced
+  # scaffold, that produced a range on the first contig spanning the coordinate
+  # extremes of all of them: a window tens of megabases wide, silently, with no
+  # error. FeatureMatrix would then be asked for hundreds of thousands of bins.
+  #
+  # Keep the contig and strand carrying the most records, which is the real
+  # locus, and say so when records were dropped.
+  sq <- as.character(seqnames(g))
+  if (length(unique(sq)) > 1) {
+    keep_sq <- names(sort(table(sq), decreasing = TRUE))[1]
+    wrn(sprintf("%s is annotated on %d contigs (%s); keeping %s, which carries %d of %d records",
+                symbol, length(unique(sq)),
+                paste(sort(unique(sq)), collapse = ", "),
+                keep_sq, sum(sq == keep_sq), length(sq)))
+    g <- g[sq == keep_sq]
+  }
+  stv <- as.character(strand(g))
+  if (length(unique(stv)) > 1) {
+    keep_st <- names(sort(table(stv), decreasing = TRUE))[1]
+    wrn(sprintf("%s has records on both strands; keeping '%s' (%d of %d records)",
+                symbol, keep_st, sum(stv == keep_st), length(stv)))
+    g <- g[stv == keep_st]
+  }
+  if (!length(g)) return(NULL)
+
   gr <- GRanges(as.character(seqnames(g))[1],
                 IRanges(min(start(g)), max(end(g))),
                 strand = as.character(strand(g))[1])
@@ -1811,6 +2036,76 @@ for (g in names(resolved)) {
 # -----------------------------------------------------------------------------
 # Cell 8: summary
 # -----------------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
+# PANEL COMPLETENESS AUDIT
+#
+# Added 2026-11-13. Everything above reports on the genes this run ASKED for,
+# which is exactly the blind spot that let a five-gene subset run look complete:
+# every requested gene succeeded, so every count read 5 of 5.
+#
+# This block asks a different question. For every gene in the FULL panel,
+# whether or not this run requested it, does a current _byArm figure exist on
+# disk? That is the question a collaborator is really asking when they say a
+# gene is missing, and it is answered against the filesystem rather than against
+# this run's own bookkeeping.
+#
+# Four outcomes per gene:
+#   ok           drawn by this run
+#   STALE        a file exists but an earlier run wrote it
+#   NOT REQUESTED no file, and this run did not ask for it (a subset run)
+#   MISSING      requested, but nothing was written; the warnings above say why
+# -----------------------------------------------------------------------------
+
+# CT_SLUG, not a second copy of the slug rule. The loop builds its stems as
+# paste0(g, "_", TISSUE, "_", CT_SLUG), and an audit that recomputed the slug
+# would silently stop matching the moment either rule changed.
+stem_for <- function(g) paste0(g, "_", TISSUE, "_", CT_SLUG)
+audit <- rbindlist(lapply(PANEL_GENES, function(g) {
+  st <- stem_for(g)
+  f  <- file.path(OUT_DIR, paste0(st, "_byArm.pdf"))
+  on_disk   <- file.exists(f)
+  this_run  <- paste0(st, "_byArm") %in% FIGS_WRITTEN$stems
+  requested <- g %in% GENES_REQ
+  data.table(
+    gene      = g,
+    requested = requested,
+    this_run  = this_run,
+    on_disk   = on_disk,
+    status    = if (this_run) "ok"
+                else if (on_disk) "STALE"
+                else if (!requested) "NOT REQUESTED"
+                else "MISSING",
+    byArm_pdf = if (on_disk) basename(f) else NA_character_,
+    file_mtime = if (on_disk) format(file.info(f)$mtime, "%Y-%m-%d %H:%M") else NA_character_
+  )
+}))
+
+hdr("Phase 6: panel completeness")
+say(sprintf("  full %s panel: %d genes", TISSUE, nrow(audit)))
+print(audit[, .(gene, requested, status, file_mtime)])
+fwrite(audit, file.path(OUT_DIR, paste0("panel_audit_", TISSUE, ".csv")))
+say(sprintf("    wrote panel_audit_%s.csv", TISSUE))
+
+bad <- audit[status != "ok"]
+if (nrow(bad)) {
+  say("")
+  wrn(sprintf("%d of %d panel genes do NOT have a figure from this run:",
+              nrow(bad), nrow(audit)))
+  for (s in unique(bad$status)) {
+    say(sprintf("          %-14s %s", s,
+                paste(bad[status == s]$gene, collapse = ", ")))
+  }
+  say("")
+  say("          STALE and NOT REQUESTED both mean the file in that directory,")
+  say("          if there is one, predates this run and does NOT carry the")
+  say("          current formatting. Rerun the full panel before sending:")
+  say(sprintf("            Rscript <this script> %s", TISSUE))
+} else {
+  say("")
+  ok(sprintf("every one of the %d panel genes has a figure from this run",
+             nrow(audit)))
+}
 
 hdr("Done")
 print(made)
